@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # Allow manual trigger from GitHub UI
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Restore NuGet packages
+        run: dotnet restore ./backend/TrainingTracker.sln
+
+      - name: Build SSDT project (produce DACPAC)
+        shell: pwsh
+        run: |
+          msbuild ./POC_SpecKitProj/POC_SpecKitProj/POC_SpecKitProj.sqlproj /t:Build /p:Configuration=Release
+          if (-not (Test-Path "./POC_SpecKitProj/POC_SpecKitProj/bin/Release/POC_SpecKitProj.dacpac")) {
+            Write-Error "DACPAC missing: expected POC_SpecKitProj/POC_SpecKitProj/bin/Release/POC_SpecKitProj.dacpac"
+            exit 1
+          }
+
+      - name: Build solution
+        run: dotnet build ./backend/TrainingTracker.sln --configuration Release --no-restore
+
+      - name: Run tests with coverage (in-memory tests only)
+        shell: pwsh
+        run: |
+          # Run tests but skip EF-based integration tests in CI (requires SQL Server)
+          # Filter out *EfTests to run only fast in-memory tests
+          dotnet test --no-build --configuration Release ./backend/TrainingTracker.sln --filter "FullyQualifiedName!~EfTests" /p:CollectCoverage=true /p:CoverletOutput=TestResults/ /p:CoverletOutputFormat=lcov /p:Threshold=50 /p:ThresholdType=line
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: backend/TrainingTracker.Tests/TestResults/*.info
